@@ -12,11 +12,12 @@
 
 #include <boost/beast2/detail/config.hpp>
 #include <boost/beast2/application.hpp>
+#include <boost/beast2/log_service.hpp>
+#include <boost/beast2/format.hpp>
 #include <boost/beast2/read.hpp>
 #include <boost/beast2/write.hpp>
 #include <boost/beast2/server/any_lambda.hpp>
 #include <boost/beast2/server/basic_router.hpp>
-#include <boost/beast2/server/logger.hpp>
 #include <boost/beast2/server/route_handler_asio.hpp>
 #include <boost/beast2/server/router_asio.hpp>
 #include <boost/beast2/error.hpp>
@@ -24,6 +25,8 @@
 #include <boost/http_proto/request_parser.hpp>
 #include <boost/http_proto/response.hpp>
 #include <boost/http_proto/serializer.hpp>
+#include <boost/http_proto/string_body.hpp>
+#include <boost/url/parse.hpp>
 #include <boost/asio/prepend.hpp>
 
 namespace boost {
@@ -107,7 +110,7 @@ http_session(
     Stream& stream,
     router_asio<Stream> rr,
     any_lambda<void(system::error_code)> close)
-    : sect_(app.sections().get("http_session"))
+    : sect_(use_log_service(app).get_section("http_session"))
     , id_(
         []() noexcept
         {
@@ -144,6 +147,7 @@ http_session<Stream>::
 do_read()
 {
     pr_.start();
+    sr_.reset();
     beast2::async_read(stream_, pr_,
         call_mf(&http_session::on_read, this));
 }
@@ -173,8 +177,6 @@ on_read(
 
     preq_.reset(new Request(
         pr_.get().method(),
-        urls::segments_encoded_view(
-            pr_.get().target()),
         *this->pconfig_,
         pr_.get(),
         pr_));
@@ -193,10 +195,32 @@ on_read(
         http_proto::status::ok, pr_.get().version());
     pres_->m.set_keep_alive(pr_.get().keep_alive());
 
+    // parse the URL
+    {
+        auto rv = urls::parse_uri_reference(pr_.get().target());
+        if(rv.has_value())
+        {
+            preq_->target = rv.value();
+            preq_->base_path = "";
+            preq_->suffix_path = std::string(rv->encoded_path());
+        }
+        else
+        {
+            // malformed target
+            pres_->status(
+                http_proto::status::bad_request);
+            pres_->set_body("Bad Request: " + rv.error().message());
+            goto do_write;
+        }
+    }
+
     // invoke handlers for the route
     BOOST_ASSERT(! pwg_);
     route_state_ = {};
     ec = rr_(*preq_, *pres_, route_state_);
+
+    if(! ec.failed())
+        goto do_write;
 
     if(ec == error::detach)
     {
@@ -205,10 +229,33 @@ on_read(
         return;
     }
 
-    if(ec.failed())
+    if(ec == error::next)
     {
-        // give a default error response?
+        // unhandled
+        pres_->status(http_proto::status::not_found);
+        std::string s;
+        format_to(s, "The requested URL {} was not found on this server.", preq_->target);
+        //pres_->m.set_keep_alive(false); // VFALCO?
+        pres_->set_body(s);
+        goto do_write;
     }
+
+    // error message of last resort
+    {
+        pres_->status(http_proto::status::internal_server_error);
+        std::string s;
+        format_to(s, "An internal server error occurred: {}", ec.message());
+        //pres_->m.set_keep_alive(false); // VFALCO?
+        pres_->set_body(s);
+    }
+
+do_write:
+    if(sr_.is_done())
+    {
+        // happens when the handler sends the response
+        return on_write(system::error_code(), 0);
+    }
+
     beast2::async_write(stream_, sr_,
         call_mf(&http_session::on_write, this));
 }

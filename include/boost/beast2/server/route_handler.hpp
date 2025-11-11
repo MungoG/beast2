@@ -157,7 +157,8 @@ struct Request
         The remaining portion is available in
         @ref path.
     */
-    urls::segments_encoded_view base_path;
+    std::string base_path;
+    std::string suffix_path;
 
     /** The matching portion of the request path.
 
@@ -178,12 +179,10 @@ struct Request
 
     Request(
         http_proto::method method_,
-        urls::segments_encoded_view path_,
         acceptor_config port_,
         http_proto::request_base const& m_,
         http_proto::request_parser& pr_)
-        : path(path_)
-        , method(method_)
+        : method(method_)
         , port(port_)
         , m(m_)
         , pr(pr_)
@@ -227,18 +226,6 @@ struct Response
         : m(m_)
         , sr(sr_)
     {
-    }
-
-};
-
-struct RouterTraits
-{
-    static
-    auto
-    method(Request const& req) noexcept ->
-        http_proto::method
-    {
-        return req.pr.get().method();
     }
 
 };

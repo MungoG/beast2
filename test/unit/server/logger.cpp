@@ -8,4 +8,4 @@
 //
 
 // Test that header file is self-contained.
-#include <boost/beast2/server/logger.hpp>
+#include <boost/beast2/logger.hpp>

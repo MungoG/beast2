@@ -90,13 +90,15 @@ public:
     */
     basic_router()
         : any_router(
-            [](void* req) -> http_proto::method
+            [](void* preq) -> req_info
             {
-                return reinterpret_cast<Request*>(req)->method;
-            },
-            [](void* req) -> urls::segments_encoded_view&
-            {
-                return reinterpret_cast<Request*>(req)->path;
+                auto& req = *reinterpret_cast<Request*>(preq);
+                req_info ri;
+                ri.method = req.method;
+                ri.base_path = &req.base_path;
+                ri.suffix_path = &req.suffix_path;
+                ri.path = &req.path;
+                return ri;
             })
     {
     }
@@ -124,7 +126,7 @@ public:
     >
     void use(H0&& h0, HN&&... hn)
     {
-        append(true, all_methods, "/",
+        append(true, all_methods, "",
             std::forward<H0>(h0),
             std::forward<HN>(hn)...);
     }

@@ -9,9 +9,11 @@
 
 #include "certificate.hpp"
 #include "serve_detached.hpp"
+#include "serve_log_admin.hpp"
 #include <boost/beast2/application.hpp>
 #include <boost/beast2/asio_io_context.hpp>
 #include <boost/beast2/server/http_server.hpp>
+#include <boost/beast2/server/router.hpp>
 #include <boost/beast2/server/serve_static.hpp>
 #include <boost/beast2/error.hpp>
 #include <boost/http_proto/request_parser.hpp>
@@ -65,22 +67,8 @@ int server_main( int argc, char* argv[] )
             (unsigned short)std::atoi(argv[2]),
             std::atoi(argv[4]));
 
+        //srv.wwwroot.use("/log", serve_log_admin(app));
         srv.wwwroot.use("/", serve_static( argv[3] ));
-
-        // unhandled errors
-        srv.wwwroot.err(
-            []( Request&, Response& res,
-                system::error_code const& ec)
-            {
-                http_proto::status sc;
-                if(ec == system::errc::no_such_file_or_directory)
-                    sc = http_proto::status::not_found;
-                else
-                    sc = http_proto::status::internal_server_error;
-                res.status(sc);
-                res.set_body(ec.message());
-                return error::success;
-            });
 
         app.start();
         srv.attach();
@@ -100,29 +88,3 @@ int main(int argc, char* argv[])
 {
     return boost::beast2::server_main( argc, argv );
 }
-/*
-
-workers
-    provide acceptors
-    has an executor
-    needs a socket to accept into
-
-worker_plain
-worker_ssl
-worker_flex
-    has an executor
-    provides stream()
-
-http_session
-    inject
-        server&
-        router&
-        Stream&
-        close_fn
-
-    do_session: called when a new connection is accepted
-    calls external do_close() to notify end of session
-    calls derived class do_fail() to log an error
-    uses the executor of the stream
-
-*/

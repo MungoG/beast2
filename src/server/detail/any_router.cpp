@@ -60,8 +60,7 @@ struct any_router::impl
     std::size_t size = 0;
     std::vector<entry> list;
     std::vector<errfn_ptr> errfns;
-    http_proto::method(*get_method)(void*);
-    urls::segments_encoded_view&(*get_path)(void*);
+    req_info(*get_req_info)(void*);
 };
 
 //------------------------------------------------
@@ -115,12 +114,10 @@ operator=(any_router const& other) noexcept
 
 any_router::
 any_router(
-    http_proto::method(*get_method)(void*),
-    urls::segments_encoded_view&(*get_path)(void*))
+    req_info(*get_req_info)(void*))
     : impl_(new impl)
 {
-    impl_->get_path = get_path;
-    impl_->get_method = get_method;
+    impl_->get_req_info = get_req_info;
 }
 
 std::size_t
@@ -137,9 +134,8 @@ invoke(
         system::error_code
 {
     system::error_code ec;
-    auto method = impl_->get_method(req);
-    auto& path = impl_->get_path(req);
-    std::string path_str = std::string(path.buffer());
+    auto ri = impl_->get_req_info(req);
+    std::string path_str = std::string(ri.path->buffer());
 
     // routers don't detach
     //BOOST_ASSERT(st.pos != st.resume);
@@ -152,21 +148,25 @@ invoke(
             ++st.pos;
 
             if( e.method != http_proto::method::unknown &&
-                method != e.method)
+                ri.method != e.method)
                 continue;
 
-            if(e.prefix)
+            if(! e.exact_prefix.empty())
             {
-                // only the prefix has to match
-                if(! core::string_view(path_str).starts_with(
+                if(e.prefix)
+                {
+                    // only the prefix has to match
+                    if(! core::string_view(*ri.suffix_path).starts_with(
                         core::string_view(e.exact_prefix)))
-                    continue;
-            }
-            else
-            {
-                // check for full match
-                //if(! match(path, e.pat))
-                //  continue;
+                        continue;
+                }
+                else
+                {
+                    // full match
+                    if( core::string_view(*ri.suffix_path) !=
+                        core::string_view(e.exact_prefix))
+                        continue;
+                }
             }
         }
         else
@@ -191,9 +191,18 @@ invoke(
         }
 
         // VFALCO not sure how to handle path on resume
-        auto const saved = path;
-        // VFALCO TODO adjust path
-        ec = e.handler->operator()(req, res, st);
+        {
+            auto const base_path0 = *ri.base_path;
+            auto const suffix_path0 = *ri.suffix_path;
+            ri.base_path->append(
+                ri.suffix_path->data(), e.exact_prefix.size());
+            ri.suffix_path->erase(0, e.exact_prefix.size());
+            // invoke the handler
+            ec = e.handler->operator()(req, res, st);
+            *ri.base_path = base_path0;
+            *ri.suffix_path = suffix_path0;
+        }
+
         if(! ec.failed())
             return ec;
         if(ec == error::detach)
@@ -209,7 +218,6 @@ invoke(
             return ec;
         if( ec != error::next)
             goto do_error;
-        path = saved;
     }
     return error::next;
 
